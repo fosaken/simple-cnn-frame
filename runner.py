@@ -39,6 +39,7 @@ class Trainer(object):
         self.save_dir = kwargs.pop("output_dir", "tmp")
 
         self.eval_interval = kwargs.pop("eval_interval", 1)
+        self.log_interval = kwargs.pop("log_interval", 10)
 
         self.gpu = kwargs.pop("use_gpu", True)
         self.gpu_ids = kwargs.pop("gpu_list", [0])
@@ -57,7 +58,7 @@ class Trainer(object):
     def train(self):
         for idx, self.epoch in enumerate(range(self.start_epoch, self.epochs+1)):
             self.train_epoch()
-            if idx % self.eval_interval == 0:
+            if (idx + 1) % self.eval_interval == 0:
                 self.val()
 
     def train_epoch(self):
@@ -68,19 +69,17 @@ class Trainer(object):
                 labels = labels.to('cuda')
             output = self.model(imgs)
             loss = self._optimizer.update(output, labels)
-            print(f"{self.epoch} [{idx+1}/{len(self._train_dataloader)}] Loss:{loss:.6f}")
-            # TODO
+            if (idx + 1) % self.log_interval == 0:
+                self.logger.info(f"Epoch:[{self.epoch}/{self.epochs}]\t [{idx+1}/{len(self._train_dataloader)}]\t Loss:{loss:.6f}")
 
     def val(self):
         self.model.eval()
+        val_loss = 0
         with torch.no_grad():
             for idx, (imgs, labels, _) in enumerate(self._val_dataloader):
                 outputs = self.model(imgs)
-                loss = self._optimizer.update(outputs, labels, backward=False)
-                # TODO
-        torch.save({
-            "state_dict": self.model.state_dict(),
-        }, os.path.join(self.save_dir, f"epoch_{self.epoch}.pth"))
+                val_loss += self._optimizer.update(outputs, labels, backward=False)
+        self.logger.info(f"Epoch:[{self.epoch}/{self.epochs}] Val Loss:{val_loss:.6f}")
 
     def _build_optimizer(self, optm_cfg, loss_cfg):
         optm_cfg["params"] = self.model.parameters()
@@ -119,6 +118,11 @@ class Trainer(object):
             logger.addHandler(handler)
         logger.setLevel(logging.INFO)
         self.logger = logger
+
+    def saveCheckpoint(self):
+        torch.save({
+            "state_dict": self.model.state_dict(),
+        }, os.path.join(self.save_dir, f"epoch_{self.epoch}.pth"))
 
     @staticmethod
     def _get_instance(cfg):
