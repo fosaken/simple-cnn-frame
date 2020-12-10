@@ -5,6 +5,7 @@
 #    @date    2020/9/7
 #    @abstract:
 #
+import os
 
 from torch.utils.data import Dataset
 
@@ -22,18 +23,23 @@ class Pipeline(object):
 
 
 class FileListDataset(Dataset):
-    def __init__(self, file_list_fp, pipelines=()):
+    def __init__(self, file_list_fp, prefix="", pipelines=()):
         super().__init__()
+        self._prefix = prefix
         self._parse_file_list(file_list_fp)
         self.pipeline = Pipeline(*[self._get_instance(cfg) for cfg in pipelines])
 
     def __getitem__(self, index):
         splits = self.lines[index].split()
-        fp = splits[0]
-        label = splits[1:]
-        label = list(map(int, label))
+        fp = os.path.join(self._prefix, splits[0])
+        # TODO >>>
+        # label = splits[1:]
+        # label = list(map(int, label))
+        label = int(splits[1])
+        # <<<
         img = cv2.imread(fp)
         img = self.pipeline(img)
+        # return img, np.array(label), fp
         return img, label, fp
 
     def _parse_file_list(self, fp):

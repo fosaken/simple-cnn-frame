@@ -8,28 +8,30 @@
 
 import os
 import logging
+from collections import OrderedDict
 
 import torch
 from torch.utils.data import DataLoader
 
 from .datasets import FileListDataset
 from .optimizers import *
+from .lr_schedule import *
 from .losses import *
 from .models import *
 
 
 class Optimizer(object):
     def __init__(self, optimizer, criterion):
-        self._optimizer = optimizer
+        self.optimizer = optimizer
         self._criterion = criterion
         self._loss = None
 
     def update(self, predict, target, backward=True):
         self._loss = self._criterion(predict, target)
         if backward:
-            self._optimizer.zero_grad()
+            self.optimizer.zero_grad()
             self._loss.backward()
-            self._optimizer.step()
+            self.optimizer.step()
         return self._loss.item()
 
 
@@ -48,8 +50,10 @@ class Trainer(object):
         self.epochs = kwargs.pop("epochs", 100)
         self.epoch = 1
 
+        self._assign_model()
         self._build_logger()
         self._build_optimizer(kwargs.pop("optm_cfg"), kwargs.pop("loss_cfg"))
+        self._build_lr_schedule(kwargs.pop("lr_cfg"))
         self._build_train_dataset(kwargs.pop("train_dataset_cfg"))
         self._build_train_dataloader(kwargs.pop("train_dataloader_cfg"))
         self._build_val_dataset(kwargs.pop("val_dataset_cfg", {}))
@@ -65,12 +69,14 @@ class Trainer(object):
         self.model.train()
         for idx, (imgs, labels, _) in enumerate(self._train_dataloader):
             if self.gpu:
-                imgs = imgs.to('cuda')
-                labels = labels.to('cuda')
+                imgs = imgs.to(self._device)
+                labels = labels.to(self._device)
             output = self.model(imgs)
             loss = self._optimizer.update(output, labels)
             if (idx + 1) % self.log_interval == 0:
-                self.logger.info(f"Epoch:[{self.epoch}/{self.epochs}]\t [{idx+1}/{len(self._train_dataloader)}]\t Loss:{loss:.6f}")
+                self.logger.info(f"Epoch:[{self.epoch}/{self.epochs}]\t [{idx+1}/{len(self._train_dataloader)}]\t "
+                                 f"LR:{self._lr_schedule.get_lr()[-1]:.6f}\t Loss:{loss:.6f}")
+        self._lr_schedule.step()
 
     def val(self):
         self.model.eval()
@@ -85,6 +91,10 @@ class Trainer(object):
         optm_cfg["params"] = self.model.parameters()
         self._optimizer = Optimizer(optimizer=self._get_instance(optm_cfg),
                                     criterion=self._get_instance(loss_cfg))
+
+    def _build_lr_schedule(self, lr_cfg):
+        lr_cfg["optimizer"] = self._optimizer.optimizer
+        self._lr_schedule = self._get_instance(lr_cfg)
 
     def _build_train_dataset(self, dataset_cfg):
         self._train_dataset = self._get_instance(dataset_cfg)
@@ -119,10 +129,26 @@ class Trainer(object):
         logger.setLevel(logging.INFO)
         self.logger = logger
 
+    def _assign_model(self):
+        if self.gpu:
+            self.model = torch.nn.DataParallel(
+                self.model.cuda(), device_ids=self.gpu_ids, output_device=self.gpu_ids[0])
+            self._device = torch.device("cuda")
+        else:
+            self._device = torch.device("cpu")
+
     def saveCheckpoint(self):
+        state_dict = OrderedDict()
+        for k, v in self.model.state_dict().items():
+            save_k = k.replace("module.", "")
+            state_dict[save_k] = v
         torch.save({
-            "state_dict": self.model.state_dict(),
+            "state_dict": state_dict,
         }, os.path.join(self.save_dir, f"epoch_{self.epoch}.pth"))
+
+    def loadCheckpoint(self):
+        # TODO
+        pass
 
     @staticmethod
     def _get_instance(cfg):
